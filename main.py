@@ -35,16 +35,13 @@ for contour in contours:
 if screen_contour is not None:
     # Get corner coordinates of the detected rectangle
     corner_coords = screen_contour.reshape(4, 2)
-    test1=[688,69,1848,410,1816,1152,700,1488]
-    test2=np.array(test1).reshape(4,2)
-    print(test2)
+
     # Order points: top-left, top-right, bottom-right, bottom-left
     corner_coords = sorted(corner_coords, key=lambda x: (x[1], x[0]))  # Sort by y first, then x
     top_left, top_right = sorted(corner_coords[:2], key=lambda x: x[0])
     bottom_left, bottom_right = sorted(corner_coords[2:], key=lambda x: x[0])
-    top_left, top_right, bottom_left, bottom_right = [[688,69],[1848,410],[1816,1152],[700,1488]]
     ordered_coords = np.array([top_left, top_right, bottom_right, bottom_left], dtype='float32')
-    ordered_coords=np.array(test2, dtype='float32')
+
     # Define target points for given resolution
     WIDTH=1920
     HEIGHT=1080
