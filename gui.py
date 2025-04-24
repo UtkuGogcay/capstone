@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QGraphicsPixmapItem
 class Communicator(QObject):
     coordinates_confirmed = pyqtSignal(list)
 
+CAMERA_INDEX=0
 
 class DraggablePoint(QGraphicsEllipseItem):
     def __init__(self, x, y, radius=8):
@@ -67,7 +68,7 @@ class CalibrationWindow(QWidget):
 
         self.setLayout(layout)
 
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(CAMERA_INDEX)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.timer = QTimer()
@@ -190,7 +191,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Calibration not performed yet.")
             return
 
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(CAMERA_INDEX)
         if not self.cap.isOpened():
             self.status_label.setText("Error: Could not open camera.")
             return
