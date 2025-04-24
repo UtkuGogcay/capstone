@@ -4,17 +4,15 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QWidget,
     QVBoxLayout, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
-    QGraphicsLineItem, QHBoxLayout, QSizePolicy
+    QGraphicsLineItem, QHBoxLayout, QSizePolicy, QComboBox
 )
 from PyQt6.QtGui import QBrush, QColor, QPen, QPixmap, QImage
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
 from PyQt6.QtWidgets import QGraphicsPixmapItem
-
+from cv2_enumerate_cameras import enumerate_cameras
 
 class Communicator(QObject):
     coordinates_confirmed = pyqtSignal(list)
-
-CAMERA_INDEX=0
 
 class DraggablePoint(QGraphicsEllipseItem):
     def __init__(self, x, y, radius=8):
@@ -32,10 +30,11 @@ class DraggablePoint(QGraphicsEllipseItem):
 
 
 class CalibrationWindow(QWidget):
-    def __init__(self, communicator):
+    def __init__(self, communicator, camera_index):
         super().__init__()
         self.setWindowTitle("Calibration")
         self.communicator = communicator
+        self.camera_index = camera_index
 
         layout = QVBoxLayout(self)
 
@@ -68,7 +67,7 @@ class CalibrationWindow(QWidget):
 
         self.setLayout(layout)
 
-        self.cap = cv2.VideoCapture(CAMERA_INDEX)
+        self.cap = cv2.VideoCapture(self.camera_index)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.timer = QTimer()
@@ -138,7 +137,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Main Window")
-        self.setGeometry(100, 100, 600, 400)  # Increased size
+        self.setGeometry(100, 100, 600, 450)  # Increased height to accommodate dropdown
 
         self.communicator = Communicator()
         self.communicator.coordinates_confirmed.connect(self.update_coordinates)
@@ -146,6 +145,15 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
+
+        # Dropdown for camera selection
+        self.camera_label = QLabel("Select Camera:")
+        self.main_layout.addWidget(self.camera_label)
+        self.camera_combo = QComboBox()
+        self.populate_camera_dropdown()
+        self.main_layout.addWidget(self.camera_combo)
+        self.current_camera_index = 0  # Default camera index
+        self.camera_combo.currentIndexChanged.connect(self.update_camera_index)
 
         self.status_label = QLabel("Calibration not performed.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -172,9 +180,36 @@ class MainWindow(QMainWindow):
         self.calibrated_coordinates = None
         self.cap = None  # Initialize camera capture
 
+    def populate_camera_dropdown(self):
+        self.camera_combo.clear()
+        available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
+        if available_cameras:
+            for camera_info in available_cameras:
+                self.camera_combo.addItem(f"{camera_info.name} (Index: {camera_info.index})", camera_info.index)
+            self.current_camera_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
+        else:
+            self.camera_combo.addItem("No cameras found", -1)
+            self.calibrate_button.setEnabled(False)
+
+    def update_camera_index(self, index):
+        self.current_camera_index = self.camera_combo.itemData(index)
+        print(f"Selected camera index: {self.current_camera_index}")
+        # Optionally, you could release the current camera and prepare for a new one here
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            self.cap = None
+        self.calibrate_button.setEnabled(self.current_camera_index != -1)
+        self.status_label.setText("Calibration not performed.")
+        self.calibrated_coordinates = None
+        self.capture_button.setEnabled(False)
+        self.image_view.clear()
+
     def open_calibration_window(self):
-        self.calibration_window = CalibrationWindow(self.communicator)
-        self.calibration_window.show()
+        if self.current_camera_index != -1:
+            self.calibration_window = CalibrationWindow(self.communicator, self.current_camera_index)
+            self.calibration_window.show()
+        else:
+            self.status_label.setText("No camera selected.")
 
     def update_coordinates(self, coords):
         labels = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"]
@@ -184,16 +219,16 @@ class MainWindow(QMainWindow):
         self.status_label.setText(text)
         self.calibrated_coordinates = coords
         self.capture_button.setEnabled(True)  # Enable capture button after calibration
-        print(f"Saved coordinates: {self.calibrated_coordinates}")
+        print(f"Saved coordinates for camera {self.current_camera_index}: {self.calibrated_coordinates}")
 
     def capture_and_transform(self):
         if self.calibrated_coordinates is None:
             self.status_label.setText("Calibration not performed yet.")
             return
 
-        self.cap = cv2.VideoCapture(CAMERA_INDEX)
+        self.cap = cv2.VideoCapture(self.current_camera_index)
         if not self.cap.isOpened():
-            self.status_label.setText("Error: Could not open camera.")
+            self.status_label.setText(f"Error: Could not open camera with index {self.current_camera_index}.")
             return
         WIDTH = 1280
         HEIGHT = 720
