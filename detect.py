@@ -9,18 +9,16 @@ import queue  # Import the queue module
 # ==============================
 # Configuration
 # ==============================
-# Moved configuration to main function
-# EXTERNAL_APP_PATH = "path/to/your/application.exe"
-# SERIAL_PORT = "COM3"
-# BAUDRATE = 9600
-CAMERA_INDEX = 0
+
+CAMERA_INDEX = 2
 IR_LASER_COLOR_RANGE = ([100, 100, 240], [140, 140, 255])
 MIN_LASER_PIXEL_SIZE = 5
 GUN_A_SIGNAL = "ir laser fired from gun a"
 GUN_B_SIGNAL = "ir laser fired from gun b"
 NMS_THRESHOLD = 3
 MAX_GUN_SIGNAL_AGE = 100  # milliseconds
-
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 # ==============================
 # Global Variables
 # ==============================
@@ -36,7 +34,7 @@ gun_signal_queue = queue.Queue()
 # ==============================
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d %(message)s",
     handlers=[
         logging.StreamHandler(),
         # logging.FileHandler("ir_laser_detection.log"),
@@ -47,27 +45,8 @@ logger = logging.getLogger(__name__)
 # ==============================
 # Helper Functions
 # ==============================
-def calculate_area(contour):
-    """Calculates the area of a contour."""
-    return cv2.contourArea(contour)
 
 
-def find_largest_contour(contours):
-    """Finds the largest contour based on area."""
-    if not contours:
-        return None
-    return max(contours, key=calculate_area)
-
-
-def get_centroid(contour):
-    """Calculates the centroid of a contour."""
-    M = cv2.moments(contour)
-    if M["m00"] != 0:
-        cX = int(M["m10"] / M["m00"])
-        cY = int(M["m01"] / M["m00"])
-        return (cX, cY)
-    else:
-        return None
 
 
 def is_within_screen(point, screen_corners):
@@ -89,62 +68,7 @@ def is_within_screen(point, screen_corners):
     return inside
 
 
-def find_projector_screen(frame):
-    """
-    Detects the projector screen in the frame.
-    Now, this function only uses the pre-defined corners.
-    """
-    global projector_screen_corners
-    if len(projector_screen_corners) == 4:
-        return np.array(projector_screen_corners, dtype=np.float32)
-    else:
-        return None
 
-
-def calculate_homography(src_points, dst_points):
-    """
-    Calculates the homography matrix to transform from source points to
-    destination points.
-    """
-    if len(src_points) >= 4 and len(dst_points) >= 4:
-        H, _ = cv2.findHomography(src_points, dst_points)
-        return H
-    return None
-
-
-def transform_point(point, H):
-    """
-    Transforms a point using the homography matrix.
-    """
-    if H is None:
-        return point  # Return original point if no homography matrix
-
-    x, y = point
-    homogeneous_point = [x, y, 1]
-    transformed_point = H.dot(homogeneous_point)
-    transformed_x = transformed_point[0] / transformed_point[2]
-    transformed_y = transformed_point[1] / transformed_point[2]
-    return (int(transformed_x), int(transformed_y))
-
-
-def non_max_suppression(detections, threshold):
-    """
-    Applies non-maximum suppression to a list of detections.
-    Args:
-        detections: A list of tuples, where each tuple is (center_x, center_y, area).
-        threshold: The distance threshold for merging detections.
-    Returns:
-        A list of filtered detections.
-    """
-    filtered_detections = []
-    while detections:
-        best_detection = detections.pop(0)
-        x1, y1, _ = best_detection
-        filtered_detections.append(best_detection)
-        detections = [
-            d for d in detections if (d[0] - x1) ** 2 + (d[1] - y1) ** 2 > threshold ** 2
-        ]
-    return filtered_detections
 
 
 def handle_old_gun_signals(old_signals):
@@ -161,6 +85,24 @@ def handle_old_gun_signals(old_signals):
             logger.debug(f"Old signal: {signal} at {timestamp}")
             # Add your logic here to handle old gun signals.
             pass
+def map_point_to_projector(point):
+    x, y = point
+
+    global screen_homography_matrix
+    global SCREEN_WIDTH
+
+    # Apply perspective transform to the input point
+    point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)  # Input point as 1x1x2 array
+    transformed_point = cv2.perspectiveTransform(point_homogeneous, screen_homography_matrix)
+
+    # Extract the x, y coordinates of the transformed point
+    projected_x, projected_y = transformed_point[0][0]
+
+    # Check if the point lies within the projector's screen boundaries
+    if 0 <= projected_x <= SCREEN_WIDTH and 0 <= projected_y <= SCREEN_HEIGHT:
+        return (int(projected_x), int(projected_y))
+    else:
+        return 0
 
 
 # ==============================
@@ -205,32 +147,66 @@ def process_frame(frame):
     """
     global laser_detected, projector_screen_corners, screen_homography_matrix, gun_signal_queue
 
-    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower_bound, upper_bound = IR_LASER_COLOR_RANGE
-    mask = cv2.inRange(hsv_frame, lower_bound, upper_bound)
 
+    # Convert the frame to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Apply a threshold to find bright areas
+    # Pixels brighter than the threshold (200) will become white (255)
+    # This threshold value might need tuning based on your lighting conditions and laser brightness
+    threshold_value = 200  # Adjust this value as needed
+    _, bright_mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+
+    # The mask is now the bright_mask
+    mask = bright_mask
+
+    # Apply morphological operations to clean up the mask
+    # Erosion removes small noise, dilation expands the white regions
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.erode(mask, kernel, iterations=1)
+    mask = cv2.bitwise_not(mask)
+    mask = cv2.dilate(mask, kernel, iterations=2)
+
+    # Find contours in the mask
+    # cv2.findContours might return different values depending on OpenCV version
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    detections = []
+    # List to store potential laser spots and their areas
+    potential_spots = []
+    laser_spot= None
+    # Iterate through the found contours
     for contour in contours:
-        area = calculate_area(contour)
-        if area > MIN_LASER_PIXEL_SIZE:
-            center = get_centroid(contour)
-            if center:
-                detections.append((center[0], center[1], area))
+        # Calculate the area of the contour
+        area = cv2.contourArea(contour)
 
-    filtered_detections = non_max_suppression(detections, NMS_THRESHOLD)
+        # Filter contours based on area (adjust these values as needed)
+        # Too small might be noise, too large might be something else
+        if 5 < area < 500:  # These values might need tuning
+            # Calculate the centroid of the contour
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cX = int(M["m10"] / M["m00"])
+                cY = int(M["m01"] / M["m00"])
+
+                # Store the potential spot coordinates and its area
+                potential_spots.append({'center': (cX, cY), 'area': area})
+
+    # If potential spots were found, select the one with the largest area
+    if potential_spots:
+        # Find the spot with the maximum area
+        best_spot = max(potential_spots, key=lambda spot: spot['area'])
+
+        # Add the best spot's coordinates to the laser_spots list
+        laser_spot=best_spot['center']
+
+        # Draw a circle around the detected spot on the original frame
+        cv2.circle(frame, best_spot['center'], 5, (0, 255, 0), -1)  # Green circle
 
     laser_detected = False
-    if filtered_detections:
-        best_detection = filtered_detections[0]
-        center_x, center_y, _ = best_detection
-        center = (center_x, center_y)
-        if projector_screen_corners:
-            center = transform_point(center, screen_homography_matrix)
-        if is_within_screen(center, projector_screen_corners):
+    if laser_spot is not None:
+        if map_point_to_projector(laser_spot) != 0:
             laser_detected = True
-            logger.info(f"IR Laser Detected at: {center}")
+            logger.info(f"IR Laser Detected at: {laser_spot}")
             gun_signal = None
             # Check for gun signals in the queue
             old_signals = []
@@ -245,27 +221,13 @@ def process_frame(frame):
 
             if gun_signal:
                 logger.info(f"Gun Fired: Gun {gun_signal}")
-            cv2.circle(frame, center, 5, (0, 255, 0), -1)
+            cv2.circle(frame, laser_spot, 5, (0, 255, 0), -1)
 
-    # Attempt to find the projector screen. Now it uses the global variable.
-    if not projector_screen_corners:
-        projector_screen_corners_local = find_projector_screen(frame)
-        if projector_screen_corners_local is not None:
-            projector_screen_corners = projector_screen_local
-            logger.info("Projector screen found")
-            frame_width = frame.shape[1]
-            frame_height = frame.shape[0]
-            dst_points = np.array(
-                [[0, 0], [frame_width - 1, 0], [frame_width - 1, frame_height - 1], [0, frame_height - 1]],
-                dtype=np.float32,
-            )
-            screen_homography_matrix = calculate_homography(
-                projector_screen_corners.astype(np.float32), dst_points
-            )
+
 
     # draw the screen
-    if projector_screen_corners:
-        cv2.polylines(frame, [projector_screen_corners.astype(np.int32)], True, (0, 255, 255), 2)
+
+    cv2.polylines(frame, [projector_screen_corners.astype(np.int32)], True, (0, 255, 255), 2)
     return frame
 
 
@@ -328,8 +290,6 @@ def main(
         logger.info(f"Started external application: {external_app_path}")
     except Exception as e:
         logger.error(f"Error starting external application: {e}")
-        print(f"Error starting external application: {e}")  # Keep print
-
     # 2. Initialize serial communication
     try:
         serial_connection = serial.Serial(serial_port, baudrate, timeout=1)
@@ -337,8 +297,11 @@ def main(
         time.sleep(2)
     except serial.SerialException as e:
         logger.error(f"Error connecting to serial port: {e}")
-        print(f"Error connecting to serial port: {e}")  # Keep print
         serial_connection = None
+    src=np.float32(projector_corners)
+    dst=np.float32([[0, 0], [SCREEN_WIDTH, 0], [SCREEN_WIDTH, SCREEN_HEIGHT], [0, SCREEN_HEIGHT]])
+    global screen_homography_matrix
+    screen_homography_matrix= cv2.getPerspectiveTransform(src, dst)
 
     # 4. Start camera feed and serial reading in separate threads
     camera_thread = threading.Thread(target=camera_feed)
@@ -366,9 +329,9 @@ def main(
 
 if __name__ == "__main__":
     # Example usage:
-    external_app_path = "path/to/your/application.exe"  # Replace
-    serial_port = "COM3"  # Replace
-    baudrate = 9600  # Replace
+    external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Replace
+    serial_port = "COM12"  # Replace
+    baudrate = 115200  # Replace
     projector_corners = [
         (100, 200),
         (600, 200),
