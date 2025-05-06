@@ -4,340 +4,215 @@ import threading
 import time
 import numpy as np
 import logging
-import queue  # Import the queue module
-
-# ==============================
-# Configuration
-# ==============================
-
-CAMERA_INDEX = 2
-IR_LASER_COLOR_RANGE = ([100, 100, 240], [140, 140, 255])
-MIN_LASER_PIXEL_SIZE = 5
-GUN_A_SIGNAL = "ir laser fired from gun a"
-GUN_B_SIGNAL = "ir laser fired from gun b"
-NMS_THRESHOLD = 3
-MAX_GUN_SIGNAL_AGE = 100  # milliseconds
-SCREEN_WIDTH = 1920
-SCREEN_HEIGHT = 1080
-# ==============================
-# Global Variables
-# ==============================
-serial_connection = None
-camera = None
-laser_detected = False
-projector_screen_corners = []
-screen_homography_matrix = None
-gun_signal_queue = queue.Queue()
-
-# ==============================
-# Logging Configuration
-# ==============================
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        # logging.FileHandler("ir_laser_detection.log"),
-    ],
-)
-logger = logging.getLogger(__name__)
-
-# ==============================
-# Helper Functions
-# ==============================
+import queue
+import subprocess
 
 
+class LaserDetectionSystem:
+    def __init__(self, camera_index, serial_port, baudrate, projector_corners):
+        # Config
+        self.CAMERA_INDEX = camera_index
+        self.CAMERA_WIDTH = 1280
+        self.CAMERA_HEIGHT = 720
+        self.SCREEN_WIDTH = 1920
+        self.SCREEN_HEIGHT = 1080
+        self.MAX_GUN_SIGNAL_AGE = 100  # ms
 
+        self.lower_red = np.array([0, 100, 100])
+        self.upper_red = np.array([10, 255, 255])
 
-def is_within_screen(point, screen_corners):
-    """
-    Checks if a point is within the quadrilateral defined by the screen corners.
-    This uses the point-in-polygon test.
-    """
-    if not screen_corners or len(screen_corners) != 4:
-        return True  # Consider it inside if corners are not defined yet.
+        self.lower_red2 = np.array([170, 100, 100])
+        self.upper_red2 = np.array([180, 255, 255])
+        # Signals
+        self.GUN_A_SIGNAL = "ir laser fired from gun a"
+        self.GUN_B_SIGNAL = "ir laser fired from gun b"
 
-    x, y = point
-    inside = False
-    p1x, p1y = screen_corners[0]
-    for i in range(4):
-        p2x, p2y = screen_corners[(i + 1) % 4]
-        if ((p1y > y) != (p2y > y)) and (x < (p2x - p1x) * (y - p1y) / (p2y - p1y) + p1x):
-            inside = not inside
-        p1x, p1y = p2x, p2y
-    return inside
+        # State
+        self.serial_port = serial_port
+        self.baudrate = baudrate
+        self.projector_corners = np.array(projector_corners, dtype=np.float32)
 
+        # Components
+        self.serial_connection = None
+        self.camera = None
+        self.gun_signal_queue = queue.Queue()
+        self.stop_event = threading.Event()
 
+        # Homography
+        src = np.float32(projector_corners)
+        dst = np.float32([[0, 0], [self.SCREEN_WIDTH, 0], [self.SCREEN_WIDTH, self.SCREEN_HEIGHT], [0, self.SCREEN_HEIGHT]])
+        self.screen_homography_matrix = cv2.getPerspectiveTransform(src, dst)
 
+        # Logger
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        self.logger = logging.getLogger("LaserSystem")
 
+    def map_point_to_projector(self, point):
+        x, y = point
+        point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
+        transformed_point = cv2.perspectiveTransform(point_homogeneous, self.screen_homography_matrix)
+        projected_x, projected_y = transformed_point[0][0]
 
-def handle_old_gun_signals(old_signals):
-    """
-    Handles gun signals that are older than MAX_GUN_SIGNAL_AGE.
-    This function is currently empty, but you can add your logic here.
+        if 0 <= projected_x <= self.SCREEN_WIDTH and 0 <= projected_y <= self.SCREEN_HEIGHT:
+            return int(projected_x), int(projected_y)
+        else:
+            return None
 
-    Args:
-        old_signals: A list of tuples, where each tuple is (signal, timestamp).
-    """
-    if old_signals:
-        logger.warning(f"Handling {len(old_signals)} old gun signals.")
-        for signal, timestamp in old_signals:
-            logger.debug(f"Old signal: {signal} at {timestamp}")
-            # Add your logic here to handle old gun signals.
-            pass
-def map_point_to_projector(point):
-    x, y = point
+    def handle_old_gun_signals(self, old_signals):
+        if old_signals:
+            self.logger.warning(f"Handling {len(old_signals)} old gun signals.")
 
-    global screen_homography_matrix
-    global SCREEN_WIDTH
+    def read_serial(self):
+        try:
+            while not self.stop_event.is_set():
+                if self.serial_connection and self.serial_connection.in_waiting > 0:
+                    data = self.serial_connection.readline().decode("utf-8").strip().lower()
+                    self.logger.debug(f"Received from serial: {data}")
+                    gun_signal = None
+                    if self.GUN_A_SIGNAL in data:
+                        gun_signal = "A"
+                    elif self.GUN_B_SIGNAL in data:
+                        gun_signal = "B"
+                    elif "ready" in data:
+                        gun_signal = "ready"
 
-    # Apply perspective transform to the input point
-    point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)  # Input point as 1x1x2 array
-    transformed_point = cv2.perspectiveTransform(point_homogeneous, screen_homography_matrix)
+                    if gun_signal:
+                        self.gun_signal_queue.put((gun_signal, time.time() * 1000))
 
-    # Extract the x, y coordinates of the transformed point
-    projected_x, projected_y = transformed_point[0][0]
+        except serial.SerialException as e:
+            self.logger.error(f"Serial error: {e}")
+            self.serial_connection = None
 
-    # Check if the point lies within the projector's screen boundaries
-    if 0 <= projected_x <= SCREEN_WIDTH and 0 <= projected_y <= SCREEN_HEIGHT:
-        return (int(projected_x), int(projected_y))
-    else:
-        return 0
+    def process_frame(self, frame):
+        # Convert the frame to HSV color space
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
+        # Create masks for the red color ranges
+        mask1 = cv2.inRange(hsv, self.lower_red, self.upper_red)
+        mask2 = cv2.inRange(hsv, self.lower_red2, self.upper_red2)
+        mask = cv2.bitwise_or(mask1, mask2)
 
-# ==============================
-# Thread Functions
-# ==============================
-def read_serial():
-    """Reads data from the serial port and sets the global variable."""
-    global serial_connection, gun_signal_queue
-    try:
-        while serial_connection and serial_connection.is_open:
-            if serial_connection.in_waiting > 0:
-                data = serial_connection.readline().decode("utf-8").strip().lower()
-                logger.debug(f"Received from serial: {data}")
-                if GUN_A_SIGNAL in data:
-                    gun_signal = "A"
-                    logger.info("Gun A fired signal received")
-                elif GUN_B_SIGNAL in data:
-                    gun_signal = "B"
-                    logger.info("Gun B fired signal received")
-                elif "ready" in data:
-                    gun_signal = "ready"
-                    logger.info("Serial port is ready")
-                else:
-                    gun_signal = None  # important: clear other signals
-                if gun_signal:
-                    gun_signal_queue.put((gun_signal, time.time() * 1000))  # Add to the queue
-    except serial.SerialException as e:
-        logger.error(f"Serial error: {e}")
-        if serial_connection:
-            serial_connection.close()
-        serial_connection = None
-    except Exception as e:
-        logger.error(f"Error reading from serial port: {e}")
-        if serial_connection:
-            serial_connection.close()
-        serial_connection = None
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        potential_spots = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if 5 < area < 500:
+                M = cv2.moments(contour)
+                if M["m00"] != 0:
+                    cX = int(M["m10"] / M["m00"])
+                    cY = int(M["m01"] / M["m00"])
+                    potential_spots.append({'center': (cX, cY), 'area': area})
 
-def process_frame(frame):
-    """
-    Processes a single frame from the camera for IR laser detection.
-    """
-    global laser_detected, projector_screen_corners, screen_homography_matrix, gun_signal_queue
+        laser_spot = None
+        if potential_spots:
+            best_spot = max(potential_spots, key=lambda spot: spot['area'])
+            laser_spot = best_spot['center']
+            cv2.circle(frame, best_spot['center'], 5, (0, 255, 0), -1)
 
-
-    # Convert the frame to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Apply a threshold to find bright areas
-    # Pixels brighter than the threshold (200) will become white (255)
-    # This threshold value might need tuning based on your lighting conditions and laser brightness
-    threshold_value = 200  # Adjust this value as needed
-    _, bright_mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
-
-    # The mask is now the bright_mask
-    mask = bright_mask
-
-    # Apply morphological operations to clean up the mask
-    # Erosion removes small noise, dilation expands the white regions
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.erode(mask, kernel, iterations=1)
-    mask = cv2.bitwise_not(mask)
-    mask = cv2.dilate(mask, kernel, iterations=2)
-
-    # Find contours in the mask
-    # cv2.findContours might return different values depending on OpenCV version
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # List to store potential laser spots and their areas
-    potential_spots = []
-    laser_spot= None
-    # Iterate through the found contours
-    for contour in contours:
-        # Calculate the area of the contour
-        area = cv2.contourArea(contour)
-
-        # Filter contours based on area (adjust these values as needed)
-        # Too small might be noise, too large might be something else
-        if 5 < area < 500:  # These values might need tuning
-            # Calculate the centroid of the contour
-            M = cv2.moments(contour)
-            if M["m00"] != 0:
-                cX = int(M["m10"] / M["m00"])
-                cY = int(M["m01"] / M["m00"])
-
-                # Store the potential spot coordinates and its area
-                potential_spots.append({'center': (cX, cY), 'area': area})
-
-    # If potential spots were found, select the one with the largest area
-    if potential_spots:
-        # Find the spot with the maximum area
-        best_spot = max(potential_spots, key=lambda spot: spot['area'])
-
-        # Add the best spot's coordinates to the laser_spots list
-        laser_spot=best_spot['center']
-
-        # Draw a circle around the detected spot on the original frame
-        cv2.circle(frame, best_spot['center'], 5, (0, 255, 0), -1)  # Green circle
-
-    laser_detected = False
-    if laser_spot is not None:
-        if map_point_to_projector(laser_spot) != 0:
-            laser_detected = True
-            logger.info(f"IR Laser Detected at: {laser_spot}")
+        if laser_spot and self.map_point_to_projector(laser_spot):
+            self.logger.info(f"IR Laser Detected at: {laser_spot}")
             gun_signal = None
-            # Check for gun signals in the queue
             old_signals = []
-            while not gun_signal_queue.empty():
-                signal, timestamp = gun_signal_queue.get()
-                if time.time() * 1000 - timestamp > MAX_GUN_SIGNAL_AGE:
+            while not self.gun_signal_queue.empty():
+                signal, timestamp = self.gun_signal_queue.get()
+                if time.time() * 1000 - timestamp > self.MAX_GUN_SIGNAL_AGE:
                     old_signals.append((signal, timestamp))
                 else:
-                    gun_signal = signal # get the latest valid signal
+                    gun_signal = signal
                     break
-            handle_old_gun_signals(old_signals)
+
+            self.handle_old_gun_signals(old_signals)
 
             if gun_signal:
-                logger.info(f"Gun Fired: Gun {gun_signal}")
-            cv2.circle(frame, laser_spot, 5, (0, 255, 0), -1)
+                print("FIRE!!!!!!")
+                self.logger.info(f"Gun Fired: Gun {gun_signal}")
+                # TODO: Handle HID output
 
+        if len(self.projector_corners) == 4:
+            cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
 
+        return frame
 
-    # draw the screen
+    def camera_feed(self):
+        self.camera = cv2.VideoCapture(self.CAMERA_INDEX)
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
 
-    cv2.polylines(frame, [projector_screen_corners.astype(np.int32)], True, (0, 255, 255), 2)
-    return frame
-
-
-def camera_feed():
-    """
-    Opens the camera, reads frames, and processes them.
-    """
-    global camera
-    try:
-        camera = cv2.VideoCapture(CAMERA_INDEX)
-        if not camera.isOpened():
-            error_message = "Error: Could not open camera."
-            logger.error(error_message)
-            print(error_message)
+        if not self.camera.isOpened():
+            self.logger.error("Could not open camera.")
             return
 
-        while True:
-            ret, frame = camera.read()
+        while not self.stop_event.is_set():
+            ret, frame = self.camera.read()
             if not ret:
-                error_message = "Error: Could not read frame."
-                logger.error(error_message)
-                print(error_message)
+                self.logger.error("Could not read frame.")
                 break
 
-            processed_frame = process_frame(frame)
-
+            processed_frame = self.process_frame(frame)
             cv2.imshow("Camera Feed", processed_frame)
+
             if cv2.waitKey(1) & 0xFF == ord("q"):
+                self.stop_event.set()
                 break
-    except Exception as e:
-        logger.error(f"Camera error: {e}")
-        print(f"Camera error: {e}")
-    finally:
-        if camera:
-            camera.release()
+
+        self.camera.release()
         cv2.destroyAllWindows()
 
+    def start_serial(self):
+        try:
+            self.serial_connection = serial.Serial(self.serial_port, self.baudrate, timeout=1)
+            self.logger.info(f"Connected to serial port: {self.serial_port}")
+            time.sleep(2)  # Wait for serial to settle
+        except serial.SerialException as e:
+            self.logger.error(f"Serial connection failed: {e}")
 
-# ==============================
-# Main Function
-# ==============================
-def main(
-    external_app_path,
-    serial_port,
-    baudrate,
-    projector_corners,
-):
-    """
-    Main function to start the external app, initialize serial communication,
-    and start the camera feed and serial reading threads.
-    """
-    global serial_connection, projector_screen_corners
+    def start_external_app(self, app_path):
+        try:
+            subprocess.Popen(app_path)
+            self.logger.info(f"Started external app: {app_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to start app: {e}")
 
-    # 0. Set the projector screen corners.
-    projector_screen_corners = np.array(projector_corners, dtype=np.float32)
+    def run(self, external_app_path):
+        self.start_external_app(external_app_path)
+        self.start_serial()
 
-    # 1. Start the external application
-    try:
-        subprocess.Popen(external_app_path)
-        logger.info(f"Started external application: {external_app_path}")
-    except Exception as e:
-        logger.error(f"Error starting external application: {e}")
-    # 2. Initialize serial communication
-    try:
-        serial_connection = serial.Serial(serial_port, baudrate, timeout=1)
-        logger.info(f"Connected to serial port: {serial_port} at {baudrate} baud")
-        time.sleep(2)
-    except serial.SerialException as e:
-        logger.error(f"Error connecting to serial port: {e}")
-        serial_connection = None
-    src=np.float32(projector_corners)
-    dst=np.float32([[0, 0], [SCREEN_WIDTH, 0], [SCREEN_WIDTH, SCREEN_HEIGHT], [0, SCREEN_HEIGHT]])
-    global screen_homography_matrix
-    screen_homography_matrix= cv2.getPerspectiveTransform(src, dst)
+        camera_thread = threading.Thread(target=self.camera_feed)
+        camera_thread.start()
 
-    # 4. Start camera feed and serial reading in separate threads
-    camera_thread = threading.Thread(target=camera_feed)
-    camera_thread.daemon = True
-    camera_thread.start()
+        if self.serial_connection:
+            serial_thread = threading.Thread(target=self.read_serial)
+            serial_thread.start()
 
-    if serial_connection:
-        serial_thread = threading.Thread(target=read_serial)
-        serial_thread.daemon = True
-        serial_thread.start()
+        try:
+            while not self.stop_event.is_set():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.logger.info("Exiting...")
+            self.stop_event.set()
 
-    # Keep the main thread alive to handle exceptions and prevent immediate exit.
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting...")
-        logger.info("Exiting...")
-    finally:
-        if serial_connection:
-            serial_connection.close()
-        logger.info("Closed serial connection.")
-        print("Closed serial connection.")
+        if self.serial_connection:
+            self.serial_connection.close()
+            self.logger.info("Closed serial connection.")
 
 
 if __name__ == "__main__":
-    # Example usage:
-    external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Replace
-    serial_port = "COM12"  # Replace
-    baudrate = 115200  # Replace
+    external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
+    serial_port = "COM12"
+    baudrate = 115200
     projector_corners = [
-        (100, 200),
-        (600, 200),
-        (600, 400),
-        (100, 400),
-    ]  # Example corners
+        (346, 204),
+        (905, 185),
+        (943, 538),
+        (301, 542),
+    ]
 
-    main(external_app_path, serial_port, baudrate, projector_corners)
+    system = LaserDetectionSystem(
+        camera_index=2,
+        serial_port=serial_port,
+        baudrate=baudrate,
+        projector_corners=projector_corners
+    )
 
+    system.run(external_app_path)
