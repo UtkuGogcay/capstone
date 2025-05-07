@@ -8,15 +8,16 @@ import queue
 import subprocess
 
 
+
 class LaserDetectionSystem:
-    def __init__(self, camera_index, serial_port, baudrate, projector_corners):
+    def __init__(self, camera_index, serial_port, baudrate, projector_corners,camera_width,camera_height):
         # Config
         self.CAMERA_INDEX = camera_index
-        self.CAMERA_WIDTH = 1280
-        self.CAMERA_HEIGHT = 720
+        self.CAMERA_WIDTH = camera_width
+        self.CAMERA_HEIGHT = camera_height
         self.SCREEN_WIDTH = 1920
         self.SCREEN_HEIGHT = 1080
-        self.MAX_GUN_SIGNAL_AGE = 100  # ms
+        self.MAX_GUN_SIGNAL_AGE = 200  # ms
 
         self.lower_red = np.array([0, 100, 100])
         self.upper_red = np.array([10, 255, 255])
@@ -60,7 +61,8 @@ class LaserDetectionSystem:
 
     def handle_old_gun_signals(self, old_signals):
         if old_signals:
-            self.logger.warning(f"Handling {len(old_signals)} old gun signals.")
+            print(old_signals)
+            self.logger.warning(f"Handling {len(old_signals)} old gun signals.:{old_signals} ")
 
     def read_serial(self):
         try:
@@ -110,7 +112,7 @@ class LaserDetectionSystem:
             laser_spot = best_spot['center']
             cv2.circle(frame, best_spot['center'], 5, (0, 255, 0), -1)
 
-        if laser_spot and self.map_point_to_projector(laser_spot):
+        if laser_spot:
             self.logger.info(f"IR Laser Detected at: {laser_spot}")
             gun_signal = None
             old_signals = []
@@ -125,9 +127,12 @@ class LaserDetectionSystem:
             self.handle_old_gun_signals(old_signals)
 
             if gun_signal:
-                print("FIRE!!!!!!")
-                self.logger.info(f"Gun Fired: Gun {gun_signal}")
-                # TODO: Handle HID output
+                if self.map_point_to_projector(laser_spot):
+                    print("FIRE!!!!!!")
+                    self.logger.info(f"Gun Fired: Gun {gun_signal}")
+                    # TODO: Handle HID output
+                else:
+                    self.logger.warning("Gun fired but point is outside projector screen.")
 
         if len(self.projector_corners) == 4:
             cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
@@ -150,7 +155,7 @@ class LaserDetectionSystem:
                 break
 
             processed_frame = self.process_frame(frame)
-            cv2.imshow("Camera Feed", processed_frame)
+            cv2.imshow("Camera Feed", cv2.resize(processed_frame, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA))
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 self.stop_event.set()
@@ -199,7 +204,7 @@ class LaserDetectionSystem:
 
 if __name__ == "__main__":
     external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
-    serial_port = "COM12"
+    serial_port = "COM11"
     baudrate = 115200
     projector_corners = [
         (346, 204),
@@ -209,10 +214,12 @@ if __name__ == "__main__":
     ]
 
     system = LaserDetectionSystem(
-        camera_index=2,
+        camera_index=1,
         serial_port=serial_port,
         baudrate=baudrate,
-        projector_corners=projector_corners
+        projector_corners=projector_corners,
+        camera_width=1920,
+        camera_height=1080,
     )
 
     system.run(external_app_path)
