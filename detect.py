@@ -25,7 +25,7 @@ class LaserDetectionSystem:
         self.lower_red2 = np.array([170, 100, 100])
         self.upper_red2 = np.array([180, 255, 255])
         # Signals
-        self.GUN_A_SIGNAL = "ir laser fired from gun a"
+        self.GUN_A_SIGNAL = " ir laser fired from gun a"
         self.GUN_B_SIGNAL = "ir laser fired from gun b"
 
         # State
@@ -45,7 +45,7 @@ class LaserDetectionSystem:
         self.screen_homography_matrix = cv2.getPerspectiveTransform(src, dst)
 
         # Logger
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
         self.logger = logging.getLogger("LaserSystem")
 
     def map_point_to_projector(self, point):
@@ -64,12 +64,28 @@ class LaserDetectionSystem:
             print(old_signals)
             self.logger.warning(f"Handling {len(old_signals)} old gun signals.:{old_signals} ")
 
+    def simulate_gun_signals(self):
+        self.logger.info("Simulated gun signal mode active. Press A or B to fire. Press Q to quit.")
+        while not self.stop_event.is_set():
+            try:
+                signal = input("Enter gun signal (A/B) or Q to quit: ").strip().upper()
+                if signal == "Q":
+                    self.stop_event.set()
+                    break
+                elif signal in ["A", "B"]:
+                    self.gun_signal_queue.put((signal, time.time() * 1000))
+                    self.logger.info(f"Simulated Gun {signal} fired.")
+            except Exception as e:
+                self.logger.error(f"Simulated input error: {e}")
+
+
     def read_serial(self):
+        print(f'help')
         try:
             while not self.stop_event.is_set():
                 if self.serial_connection and self.serial_connection.in_waiting > 0:
-                    data = self.serial_connection.readline().decode("utf-8").strip().lower()
-                    self.logger.debug(f"Received from serial: {data}")
+                    data = self.serial_connection.readline().decode("utf-8", errors="ignore").strip()
+                    print(f"Received: {data}")
                     gun_signal = None
                     if self.GUN_A_SIGNAL in data:
                         gun_signal = "A"
@@ -127,12 +143,9 @@ class LaserDetectionSystem:
             self.handle_old_gun_signals(old_signals)
 
             if gun_signal:
-                if self.map_point_to_projector(laser_spot):
-                    print("FIRE!!!!!!")
-                    self.logger.info(f"Gun Fired: Gun {gun_signal}")
-                    # TODO: Handle HID output
-                else:
-                    self.logger.warning("Gun fired but point is outside projector screen.")
+                print(f"FIRE!!!!!!")
+                self.logger.info(f"Gun Fired: Gun {gun_signal}")
+                # TODO: Handle HID output
 
         if len(self.projector_corners) == 4:
             cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
@@ -140,7 +153,7 @@ class LaserDetectionSystem:
         return frame
 
     def camera_feed(self):
-        self.camera = cv2.VideoCapture(self.CAMERA_INDEX)
+        self.camera = cv2.VideoCapture(self.CAMERA_INDEX, cv2.CAP_AVFOUNDATION)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
 
@@ -173,23 +186,39 @@ class LaserDetectionSystem:
             self.logger.error(f"Serial connection failed: {e}")
 
     def start_external_app(self, app_path):
-        try:
-            subprocess.Popen(app_path)
-            self.logger.info(f"Started external app: {app_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to start app: {e}")
+        if external_app_path:
+            try:
+                subprocess.Popen(app_path)
+            except Exception as e:
+                self.logger.error(f"Failed to start app: {e}")
+
 
     def run(self, external_app_path):
-        self.start_external_app(external_app_path)
-        self.start_serial()
+        # Safely try to start the external application
+        if external_app_path:
+            try:
+                self.start_external_app(external_app_path)
+                self.logger.info(f"Started external application: {external_app_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to start app: {e}")
+        else:
+            self.logger.info("No external app path provided. Skipping launch.")
 
-        camera_thread = threading.Thread(target=self.camera_feed)
-        camera_thread.start()
+        # Attempt serial setup
+        self.start_serial()
 
         if self.serial_connection:
             serial_thread = threading.Thread(target=self.read_serial)
             serial_thread.start()
+        else:
+            self.logger.error("Serial connection failed. Cannot listen for gun signals.")
+            return
 
+        # Start camera thread
+        self.camera_feed()
+
+        # Start either real serial listener or simulator
+        # Keep the main thread alive
         try:
             while not self.stop_event.is_set():
                 time.sleep(1)
@@ -197,14 +226,16 @@ class LaserDetectionSystem:
             self.logger.info("Exiting...")
             self.stop_event.set()
 
+        # Cleanup
         if self.serial_connection:
             self.serial_connection.close()
             self.logger.info("Closed serial connection.")
 
 
+
 if __name__ == "__main__":
-    external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
-    serial_port = "COM11"
+    external_app_path = None
+    serial_port = "/dev/cu.usbserial-1230"
     baudrate = 115200
     projector_corners = [
         (346, 204),
