@@ -1,6 +1,8 @@
 import sys
 import cv2
 import numpy as np
+import serial.tools.list_ports
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QWidget,
     QVBoxLayout, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
@@ -137,7 +139,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Main Window")
-        self.setGeometry(100, 100, 600, 450)  # Increased height to accommodate dropdown
+        self.setGeometry(100, 100, 600, 550) # Increased height to accommodate both dropdowns
 
         self.communicator = Communicator()
         self.communicator.coordinates_confirmed.connect(self.update_coordinates)
@@ -154,6 +156,16 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.camera_combo)
         self.current_camera_index = 0  # Default camera index
         self.camera_combo.currentIndexChanged.connect(self.update_camera_index)
+
+        # Dropdown for COM port selection
+        self.com_port_label = QLabel("Select COM Port:")
+        self.main_layout.addWidget(self.com_port_label)
+        self.com_port_combo = QComboBox()
+        self.populate_com_port_dropdown()
+        self.main_layout.addWidget(self.com_port_combo)
+        self.selected_com_port = None # To store the selected COM port name
+        self.com_port_combo.currentIndexChanged.connect(self.update_com_port)
+
 
         self.status_label = QLabel("Calibration not performed.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -203,6 +215,39 @@ class MainWindow(QMainWindow):
         self.calibrated_coordinates = None
         self.capture_button.setEnabled(False)
         self.image_view.clear()
+
+    # New method to populate COM port dropdown
+    def populate_com_port_dropdown(self):
+        self.com_port_combo.clear()
+        ports = serial.tools.list_ports.comports()
+        if ports:
+            for port in ports:
+                # Add item with description, store port device name as data
+                self.com_port_combo.addItem(f"{port.description} ({port.device})", port.device)
+            self.selected_com_port = self.com_port_combo.itemData(self.com_port_combo.currentIndex())
+        else:
+            self.com_port_combo.addItem("No COM ports found", None)
+            self.selected_com_port = None
+
+        # Optional: Update a status label or enable/disable buttons based on port availability
+        if self.selected_com_port:
+            print(f"Selected COM port: {self.selected_com_port}")
+            # You could enable buttons related to serial communication here
+        else:
+            print("No COM port selected.")
+            # You could disable buttons related to serial communication here
+
+
+    # New method to handle COM port selection change
+    def update_com_port(self, index):
+        self.selected_com_port = self.com_port_combo.itemData(index)
+        if self.selected_com_port:
+            print(f"Selected COM port: {self.selected_com_port}")
+            # You could enable buttons related to serial communication here
+        else:
+            print("No COM port selected.")
+            # You could disable buttons related to serial communication here
+
 
     def open_calibration_window(self):
         if self.current_camera_index != -1:
