@@ -182,7 +182,7 @@ class MainWindow(QMainWindow):
 
     def populate_camera_dropdown(self):
         self.camera_combo.clear()
-        available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
+        available_cameras = list(enumerate_cameras(cv2.CAP_ANY))
         if available_cameras:
             for camera_info in available_cameras:
                 self.camera_combo.addItem(f"{camera_info.name} (Index: {camera_info.index})", camera_info.index)
