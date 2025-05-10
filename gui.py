@@ -14,6 +14,7 @@ from PyQt6.QtGui import QBrush, QColor, QPen, QPixmap, QImage
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
 from PyQt6.QtWidgets import QGraphicsPixmapItem
 from cv2_enumerate_cameras import enumerate_cameras
+from matplotlib.style.core import available
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("gui")
@@ -227,7 +228,10 @@ class MainWindow(QMainWindow):
         self.camera_combo.blockSignals(True)
 
         self.camera_combo.clear()
-        available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
+        if sys.platform== "win32":
+            available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
+        else:
+            available_cameras = list(enumerate_cameras(cv2.CAP_ANY))
         if available_cameras:
             for camera_info in available_cameras:
                 self.camera_combo.addItem(f"{camera_info.name} (Index: {camera_info.index})", camera_info.index)
