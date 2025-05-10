@@ -1,3 +1,4 @@
+import sys
 import cv2
 import serial
 import threading
@@ -47,7 +48,12 @@ class LaserDetectionSystem:
         # Logger
         logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
         self.logger = logging.getLogger("LaserSystem")
-
+        self.cv2_backend=cv2.CAP_ANY
+        self.platform=sys.platform
+        if self.platform=="win32":
+            self.cv2_backend = cv2.CAP_DSHOW
+        else:
+            cv2_backend=cv2.CAP_AVFOUNDATION
     def map_point_to_projector(self, point):
         x, y = point
         point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
@@ -69,7 +75,7 @@ class LaserDetectionSystem:
             while not self.stop_event.is_set():
                 if self.serial_connection and self.serial_connection.in_waiting > 0:
                     data = self.serial_connection.readline().decode("utf-8").strip().lower()
-                    self.logger.debug(f"Received from serial: {data}")
+                    self.logger.info(f"Received from serial: {data}")
                     gun_signal = None
                     if self.GUN_A_SIGNAL in data:
                         gun_signal = "A"
@@ -132,7 +138,7 @@ class LaserDetectionSystem:
                     self.logger.info(f"Gun Fired: Gun {gun_signal}")
                     # TODO: Handle HID output
                 else:
-                    self.logger.warning("Gun fired but point is outside projector screen.")
+                    self.logger.debug("Gun fired but point is outside projector screen.")
 
         if len(self.projector_corners) == 4:
             cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
@@ -140,7 +146,7 @@ class LaserDetectionSystem:
         return frame
 
     def camera_feed(self):
-        self.camera = cv2.VideoCapture(self.CAMERA_INDEX)
+        self.camera = cv2.VideoCapture(self.CAMERA_INDEX,self.cv2_backend)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
 
@@ -173,23 +179,30 @@ class LaserDetectionSystem:
             self.logger.error(f"Serial connection failed: {e}")
 
     def start_external_app(self, app_path):
-        try:
-            subprocess.Popen(app_path)
-            self.logger.info(f"Started external app: {app_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to start app: {e}")
+        # Safely try to start the external application
+        if external_app_path:
+            try:
+                subprocess.Popen(app_path)
+                self.logger.info(f"Started external application: {external_app_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to start app: {e}")
+        else:
+            self.logger.critical("No external app path provided. Skipping launch.")
 
     def run(self, external_app_path):
         self.start_external_app(external_app_path)
         self.start_serial()
-
-        camera_thread = threading.Thread(target=self.camera_feed)
-        camera_thread.start()
+        if self.platform=="win32":
+            camera_thread = threading.Thread(target=self.camera_feed)
+            camera_thread.start()
 
         if self.serial_connection:
             serial_thread = threading.Thread(target=self.read_serial)
             serial_thread.start()
-
+        else:
+            self.logger.critical("Serial connection failure.")
+        if self.platform!="win32":
+            self.camera_feed()
         try:
             while not self.stop_event.is_set():
                 time.sleep(1)
