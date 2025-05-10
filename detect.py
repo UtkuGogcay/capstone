@@ -1,5 +1,6 @@
 import sys
 import cv2
+import pyautogui
 import serial
 import threading
 import time
@@ -39,7 +40,6 @@ class LaserDetectionSystem:
         self.camera = None
         self.gun_signal_queue = queue.Queue()
         self.stop_event = threading.Event()
-
         # Homography
         src = np.float32(projector_corners)
         dst = np.float32([[0, 0], [self.SCREEN_WIDTH, 0], [self.SCREEN_WIDTH, self.SCREEN_HEIGHT], [0, self.SCREEN_HEIGHT]])
@@ -53,7 +53,8 @@ class LaserDetectionSystem:
         if self.platform=="win32":
             self.cv2_backend = cv2.CAP_DSHOW
         else:
-            cv2_backend=cv2.CAP_AVFOUNDATION
+            self.cv2_backend=cv2.CAP_AVFOUNDATION
+        self.button_to_key={"A":"f","B":"g"} #TODO Tolga'ya sor
     def map_point_to_projector(self, point):
         x, y = point
         point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
@@ -135,10 +136,20 @@ class LaserDetectionSystem:
             if gun_signal:
                 if self.map_point_to_projector(laser_spot):
                     print("FIRE!!!!!!")
-                    self.logger.info(f"Gun Fired: Gun {gun_signal}")
+                    self.logger.info(f"Gun Fired: Gun {gun_signal}, at {laser_spot} which is mapped to {self.map_point_to_projector(laser_spot)}")
                     # TODO: Handle HID output
+                    # x,y=self.map_point_to_projector(laser_spot)
+                    # key=self.button_to_key.get(gun_signal,None)
+                    # if key is not None:
+                    #     pyautogui.moveTo(x,y)
+                    #     pyautogui.press(key)
+                    # else:
+                    #     self.logger.error(f"Gun signal {gun_signal} not mapped to any key.")
+                    # On Mac go to:
+                    # System Settings -> Privacy & Security -> Accessibility
+                    # Add your Terminal App to the list and give it permission. Without this PyAutoGUI cant control the mouse or keyboard.
                 else:
-                    self.logger.debug("Gun fired but point is outside projector screen.")
+                    self.logger.info("Gun fired but point is outside projector screen.")
 
         if len(self.projector_corners) == 4:
             cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
@@ -217,7 +228,7 @@ class LaserDetectionSystem:
 
 if __name__ == "__main__":
     external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
-    serial_port = "COM11"
+    serial_port = "COM6"
     baudrate = 115200
     projector_corners = [
         (346, 204),
@@ -227,7 +238,7 @@ if __name__ == "__main__":
     ]
 
     system = LaserDetectionSystem(
-        camera_index=1,
+        camera_index=0,
         serial_port=serial_port,
         baudrate=baudrate,
         projector_corners=projector_corners,
