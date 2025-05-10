@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import serial.tools.list_ports
 import serial
+import logging
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QWidget,
@@ -13,6 +14,9 @@ from PyQt6.QtGui import QBrush, QColor, QPen, QPixmap, QImage
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
 from PyQt6.QtWidgets import QGraphicsPixmapItem
 from cv2_enumerate_cameras import enumerate_cameras
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("gui")
 
 class Communicator(QObject):
     coordinates_confirmed = pyqtSignal(list)
@@ -142,7 +146,7 @@ class RefreshableComboBox(QComboBox):
     def showPopup(self):
         """Overrides the default showPopup to refresh the list before showing."""
         if self._refresh_func:
-            print("Refreshing list before showing popup...")
+            logger.debug("Refreshing list before showing popup...")
             self._refresh_func()
         super().showPopup()
 
@@ -169,7 +173,6 @@ class MainWindow(QMainWindow):
         device_layout.addWidget(self.camera_label)
         # Pass the populate method to the custom combo box
         self.camera_combo = RefreshableComboBox(self.populate_camera_dropdown)
-        self.populate_camera_dropdown() # Populate initially
         device_layout.addWidget(self.camera_combo)
         self.current_camera_index = 0
         self.camera_combo.currentIndexChanged.connect(self.update_camera_index)
@@ -215,10 +218,13 @@ class MainWindow(QMainWindow):
 
         self.calibrated_coordinates = None
         self.cap = None
+        self.populate_camera_dropdown() # Populate initially
 
     def populate_camera_dropdown(self):
         # Store current selection before clearing
         current_data = self.camera_combo.currentData()
+
+        self.camera_combo.blockSignals(True)
 
         self.camera_combo.clear()
         available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
@@ -245,16 +251,15 @@ class MainWindow(QMainWindow):
             self.camera_combo.addItem("No cameras found", -1)
             self.current_camera_index = -1
             self.calibrate_button.setEnabled(False)
-
-        # Trigger the update_camera_index slot manually if the index didn't change but the list did
-        # This is important if the previously selected item is still available but other items changed
-        # However, currentIndexChanged is usually sufficient. Let's rely on the signal.
-
+            logging.error("No cameras found.")
+        self.camera_combo.blockSignals(False)
+        self.update_camera_index(self.camera_combo.currentIndex())
 
     def update_camera_index(self, index):
         # Use itemData() to get the actual index stored
         self.current_camera_index = self.camera_combo.itemData(index)
-        print(f"Selected camera index: {self.current_camera_index}")
+        if self.current_camera_index is not None and self.current_camera_index != -1:
+            logger.info(f"Selected camera index: {self.current_camera_index}")
         # Ensure calibrate button state is correct based on selection
         self.calibrate_button.setEnabled(self.current_camera_index is not None and self.current_camera_index != -1)
 
@@ -273,6 +278,7 @@ class MainWindow(QMainWindow):
     def populate_com_port_dropdown(self):
         # Store current selection before clearing
         current_data = self.com_port_combo.currentData()
+        self.com_port_combo.blockSignals(True)
 
         self.com_port_combo.clear()
         ports = serial.tools.list_ports.comports()
@@ -311,26 +317,14 @@ class MainWindow(QMainWindow):
         else:
             self.com_port_combo.addItem("No COM ports found", None)
             self.selected_com_port = None
-
-
-        # Update status based on selection (optional)
-        if self.selected_com_port:
-             print(f"Current selected COM port: {self.selected_com_port}")
-        else:
-             print("No COM port selected.")
-
+            logging.error("No COM ports found.")
+        self.com_port_combo.blockSignals(False)
+        self.update_com_port(self.com_port_combo.currentIndex())
 
     def update_com_port(self, index):
-        # Use itemData() to get the actual port name stored
         self.selected_com_port = self.com_port_combo.itemData(index)
         if self.selected_com_port:
-            print(f"Selected COM port: {self.selected_com_port}")
-            # You would typically add logic here to manage the serial connection
-        else:
-            print("No COM port selected.")
-
-
-    # Removed the manual refresh_devices method
+            logger.info(f"Selected COM port: {self.selected_com_port}")
 
     def open_calibration_window(self):
         if self.current_camera_index is not None and self.current_camera_index != -1:
@@ -352,7 +346,7 @@ class MainWindow(QMainWindow):
         self.calibrated_coordinates = coords
         # Only enable capture if coordinates are valid (not empty list etc.)
         self.capture_button.setEnabled(self.calibrated_coordinates is not None and len(self.calibrated_coordinates) == 4)
-        print(f"Saved coordinates for camera {self.current_camera_index}: {self.calibrated_coordinates}")
+        logger.info(f"Saved coordinates for camera {self.current_camera_index}: {self.calibrated_coordinates}")
 
     def capture_and_transform(self):
         # Check if a camera is selected AND coordinates are calibrated
@@ -410,6 +404,7 @@ class MainWindow(QMainWindow):
             # self.image_view.adjustSize()
 
         except cv2.error as e:
+            logger.error(f"Error during perspective transform: {e}")
             self.status_label.setText(f"Error during perspective transform: {e}")
 
     def resizeEvent(self, event):
