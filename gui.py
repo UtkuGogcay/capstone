@@ -281,7 +281,11 @@ class MainWindow(QMainWindow):
         self.com_port_combo.blockSignals(True)
 
         self.com_port_combo.clear()
-        ports = serial.tools.list_ports.comports()
+        all_ports = serial.tools.list_ports.comports()
+        if sys.platform!= "win32":
+            ports=[port for port in all_ports if port.device.startswith("/dev/tty")]
+        else:
+            ports=all_ports
         if ports:
             for port in ports:
                 display_text = port.description
