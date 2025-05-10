@@ -1,6 +1,10 @@
 import sys
 import cv2
 import numpy as np
+import serial.tools.list_ports
+import serial
+import logging
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QWidget,
     QVBoxLayout, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
@@ -11,6 +15,9 @@ from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
 from PyQt6.QtWidgets import QGraphicsPixmapItem
 from cv2_enumerate_cameras import enumerate_cameras
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("gui")
+
 class Communicator(QObject):
     coordinates_confirmed = pyqtSignal(list)
 
@@ -18,9 +25,7 @@ class DraggablePoint(QGraphicsEllipseItem):
     def __init__(self, x, y, radius=8):
         super().__init__(-radius, -radius, 2 * radius, 2 * radius)
         self.setPos(x, y)
-        # Transparent fill
         self.setBrush(QBrush(Qt.GlobalColor.transparent))
-        # Red border
         self.setPen(QPen(QColor("red"), 2))
         self.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable)
         self.setZValue(1)
@@ -132,12 +137,25 @@ class CalibrationWindow(QWidget):
         self.timer.stop()
         event.accept()
 
+# Custom QComboBox that refreshes its list when the popup is shown
+class RefreshableComboBox(QComboBox):
+    def __init__(self, refresh_func, parent=None):
+        super().__init__(parent)
+        self._refresh_func = refresh_func
+
+    def showPopup(self):
+        """Overrides the default showPopup to refresh the list before showing."""
+        if self._refresh_func:
+            logger.debug("Refreshing list before showing popup...")
+            self._refresh_func()
+        super().showPopup()
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Main Window")
-        self.setGeometry(100, 100, 600, 450)  # Increased height to accommodate dropdown
+        self.setGeometry(100, 100, 600, 550) # Adjusted height
 
         self.communicator = Communicator()
         self.communicator.coordinates_confirmed.connect(self.update_coordinates)
@@ -146,14 +164,35 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
 
-        # Dropdown for camera selection
+        # --- Device Selection Section ---
+        device_layout = QVBoxLayout()
+        self.main_layout.addLayout(device_layout)
+
+        # Dropdown for camera selection (using the custom combo box)
         self.camera_label = QLabel("Select Camera:")
-        self.main_layout.addWidget(self.camera_label)
-        self.camera_combo = QComboBox()
-        self.populate_camera_dropdown()
-        self.main_layout.addWidget(self.camera_combo)
-        self.current_camera_index = 0  # Default camera index
+        device_layout.addWidget(self.camera_label)
+        # Pass the populate method to the custom combo box
+        self.camera_combo = RefreshableComboBox(self.populate_camera_dropdown)
+        device_layout.addWidget(self.camera_combo)
+        self.current_camera_index = 0
         self.camera_combo.currentIndexChanged.connect(self.update_camera_index)
+
+        # Dropdown for COM port selection (using the custom combo box)
+        self.com_port_label = QLabel("Select COM Port:")
+        device_layout.addWidget(self.com_port_label)
+        # Pass the populate method to the custom combo box
+        self.selected_com_port = None
+        self.com_port_combo = RefreshableComboBox(self.populate_com_port_dropdown)
+        self.populate_com_port_dropdown() # Populate initially
+        device_layout.addWidget(self.com_port_combo)
+        self.com_port_combo.currentIndexChanged.connect(self.update_com_port)
+
+        # Removed the manual Refresh button as it's now automatic
+        # self.refresh_button = QPushButton("Refresh Devices")
+        # self.refresh_button.clicked.connect(self.refresh_devices)
+        # device_layout.addWidget(self.refresh_button)
+        # --- End Device Selection Section ---
+
 
         self.status_label = QLabel("Calibration not performed.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -174,42 +213,133 @@ class MainWindow(QMainWindow):
 
         self.capture_button = QPushButton("Capture the screen")
         self.capture_button.clicked.connect(self.capture_and_transform)
-        self.capture_button.setEnabled(False)  # Disabled initially
+        self.capture_button.setEnabled(False)
         self.main_layout.addWidget(self.capture_button)
 
         self.calibrated_coordinates = None
-        self.cap = None  # Initialize camera capture
+        self.cap = None
+        self.populate_camera_dropdown() # Populate initially
 
     def populate_camera_dropdown(self):
+        # Store current selection before clearing
+        current_data = self.camera_combo.currentData()
+
+        self.camera_combo.blockSignals(True)
+
         self.camera_combo.clear()
         available_cameras = list(enumerate_cameras(cv2.CAP_DSHOW))
         if available_cameras:
             for camera_info in available_cameras:
                 self.camera_combo.addItem(f"{camera_info.name} (Index: {camera_info.index})", camera_info.index)
-            self.current_camera_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
+
+            # Try to restore previous selection
+            index = self.camera_combo.findData(current_data)
+            if index != -1:
+                 self.camera_combo.setCurrentIndex(index)
+                 # The currentIndexChanged signal will handle updating self.current_camera_index
+            elif self.camera_combo.count() > 0:
+                 # Default to first item if previous is not found and list is not empty
+                 self.camera_combo.setCurrentIndex(0)
+                 # The currentIndexChanged signal will handle updating self.current_camera_index
+            else:
+                 # Handle case where list is empty after refresh
+                 self.current_camera_index = -1
+                 self.calibrate_button.setEnabled(False)
+
+
         else:
             self.camera_combo.addItem("No cameras found", -1)
+            self.current_camera_index = -1
             self.calibrate_button.setEnabled(False)
+            logging.error("No cameras found.")
+        self.camera_combo.blockSignals(False)
+        self.update_camera_index(self.camera_combo.currentIndex())
 
     def update_camera_index(self, index):
+        # Use itemData() to get the actual index stored
         self.current_camera_index = self.camera_combo.itemData(index)
-        print(f"Selected camera index: {self.current_camera_index}")
-        # Optionally, you could release the current camera and prepare for a new one here
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
-            self.cap = None
-        self.calibrate_button.setEnabled(self.current_camera_index != -1)
+        if self.current_camera_index is not None and self.current_camera_index != -1:
+            logger.info(f"Selected camera index: {self.current_camera_index}")
+        # Ensure calibrate button state is correct based on selection
+        self.calibrate_button.setEnabled(self.current_camera_index is not None and self.current_camera_index != -1)
+
+        # Reset calibration status and capture button state
         self.status_label.setText("Calibration not performed.")
         self.calibrated_coordinates = None
         self.capture_button.setEnabled(False)
         self.image_view.clear()
 
+        # Release camera if it was open from a previous selection
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            self.cap = None
+
+
+    def populate_com_port_dropdown(self):
+        # Store current selection before clearing
+        current_data = self.com_port_combo.currentData()
+        self.com_port_combo.blockSignals(True)
+
+        self.com_port_combo.clear()
+        all_ports = serial.tools.list_ports.comports()
+        if sys.platform!= "win32":
+            ports=[port for port in all_ports if port.device.startswith("/dev/tty")]
+        else:
+            ports=all_ports
+        if ports:
+            for port in ports:
+                display_text = port.description
+                # Check if the description already contains the device name in parentheses
+                if port.device not in display_text:  # Simple check: device name not in description
+                    display_text = f"{port.description} ({port.device})"
+                elif display_text.endswith(f" ({port.device})"):  # More robust check: ends with "(COMx)"
+                    # Description already ends with (COMx), use description as is
+                    pass
+                else:  # Description contains device name, but not in the standard (COMx) format
+                    # You might decide how you want to format this.
+                    # For now, let's stick with the simpler display_text = port.description
+                    display_text = port.description
+
+                # Fallback if description is empty or just whitespace
+                if not display_text.strip():
+                    display_text = port.device
+
+                self.com_port_combo.addItem(display_text, port.device)
+            # Try to restore previous selection
+            index = self.com_port_combo.findData(current_data)
+            if index != -1:
+                self.com_port_combo.setCurrentIndex(index)
+                # The currentIndexChanged signal will handle updating self.selected_com_port
+            elif self.com_port_combo.count() > 0:
+                 # Default to first item if previous is not found and list is not empty
+                 self.com_port_combo.setCurrentIndex(0)
+                 # The currentIndexChanged signal will handle updating self.selected_com_port
+            else:
+                # Handle case where list is empty after refresh
+                self.selected_com_port = None
+
+        else:
+            self.com_port_combo.addItem("No COM ports found", None)
+            self.selected_com_port = None
+            logging.error("No COM ports found.")
+        self.com_port_combo.blockSignals(False)
+        self.update_com_port(self.com_port_combo.currentIndex())
+
+    def update_com_port(self, index):
+        self.selected_com_port = self.com_port_combo.itemData(index)
+        if self.selected_com_port:
+            logger.info(f"Selected COM port: {self.selected_com_port}")
+
     def open_calibration_window(self):
-        if self.current_camera_index != -1:
+        if self.current_camera_index is not None and self.current_camera_index != -1:
+            # Ensure camera is released before opening calibration window
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+                self.cap = None
             self.calibration_window = CalibrationWindow(self.communicator, self.current_camera_index)
             self.calibration_window.show()
         else:
-            self.status_label.setText("No camera selected.")
+            self.status_label.setText("No camera selected for calibration.")
 
     def update_coordinates(self, coords):
         labels = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"]
@@ -218,48 +348,55 @@ class MainWindow(QMainWindow):
             text += f"{label}: {coord}\n"
         self.status_label.setText(text)
         self.calibrated_coordinates = coords
-        self.capture_button.setEnabled(True)  # Enable capture button after calibration
-        print(f"Saved coordinates for camera {self.current_camera_index}: {self.calibrated_coordinates}")
+        # Only enable capture if coordinates are valid (not empty list etc.)
+        self.capture_button.setEnabled(self.calibrated_coordinates is not None and len(self.calibrated_coordinates) == 4)
+        logger.info(f"Saved coordinates for camera {self.current_camera_index}: {self.calibrated_coordinates}")
 
     def capture_and_transform(self):
-        if self.calibrated_coordinates is None:
+        # Check if a camera is selected AND coordinates are calibrated
+        if self.current_camera_index is None or self.current_camera_index == -1:
+             self.status_label.setText("No camera selected.")
+             return
+        if self.calibrated_coordinates is None or len(self.calibrated_coordinates) != 4:
             self.status_label.setText("Calibration not performed yet.")
             return
 
         self.cap = cv2.VideoCapture(self.current_camera_index)
         if not self.cap.isOpened():
             self.status_label.setText(f"Error: Could not open camera with index {self.current_camera_index}.")
+            # Disable capture button if camera fails to open
+            self.capture_button.setEnabled(False)
             return
+
         WIDTH = 1280
         HEIGHT = 720
+        # Set properties only if the camera was successfully opened
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
         ret, frame = self.cap.read()
-        self.cap.release()  # Close the camera immediately after capturing
+        self.cap.release()
 
         if not ret:
             self.status_label.setText("Error: Could not capture frame.")
             return
 
-        # Perform perspective transform
-        corner_coords = sorted(self.calibrated_coordinates, key=lambda x: (x[1], x[0]))  # Sort by y first, then x
+        corner_coords = sorted(self.calibrated_coordinates, key=lambda x: (x[1], x[0]))
         top_left, top_right = sorted(corner_coords[:2], key=lambda x: x[0])
         bottom_left, bottom_right = sorted(corner_coords[2:], key=lambda x: x[0])
         ordered_coords = np.array([top_left, top_right, bottom_right, bottom_left], dtype='float32')
         src_points = np.float32(ordered_coords)
 
         dst_points = np.array([
-            [0, 0],  # Top-left
-            [WIDTH, 0],  # Top-right
-            [WIDTH, HEIGHT],  # Bottom-right
-            [0, HEIGHT]  # Bottom-left
+            [0, 0],
+            [WIDTH, 0],
+            [WIDTH, HEIGHT],
+            [0, HEIGHT]
         ], dtype='float32')
 
         try:
             matrix = cv2.getPerspectiveTransform(src_points, dst_points)
             transformed_frame = cv2.warpPerspective(frame, matrix, (WIDTH, HEIGHT))
 
-            # Convert the transformed frame to QImage and display
             rgb_image = cv2.cvtColor(transformed_frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
@@ -267,15 +404,21 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap.fromImage(qt_image)
             scaled_pixmap = pixmap.scaled(self.image_view.size(), Qt.AspectRatioMode.KeepAspectRatio)
             self.image_view.setPixmap(scaled_pixmap)
-            self.image_view.adjustSize()
+            # image_view size policy should handle this, adjustSize might be redundant here depending on layout
+            # self.image_view.adjustSize()
 
         except cv2.error as e:
+            logger.error(f"Error during perspective transform: {e}")
             self.status_label.setText(f"Error during perspective transform: {e}")
 
     def resizeEvent(self, event):
+        # Ensure image view scales correctly when window is resized
         if self.image_view.pixmap():
-            scaled_pixmap = self.image_view.pixmap().scaled(self.image_view.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            # Get the original pixmap before scaling
+            original_pixmap = QPixmap.fromImage(self.image_view.pixmap().toImage())
+            scaled_pixmap = original_pixmap.scaled(self.image_view.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_view.setPixmap(scaled_pixmap)
+        super().resizeEvent(event) # Call the base class resize event
 
 
 if __name__ == "__main__":
