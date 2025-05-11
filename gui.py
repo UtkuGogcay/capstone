@@ -14,10 +14,13 @@ from PyQt6.QtGui import QBrush, QColor, QPen, QPixmap, QImage
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
 from PyQt6.QtWidgets import QGraphicsPixmapItem
 from cv2_enumerate_cameras import enumerate_cameras
-from matplotlib.style.core import available
+from detect import LaserDetectionSystem
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("gui")
+
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080
 
 class Communicator(QObject):
     coordinates_confirmed = pyqtSignal(list)
@@ -71,16 +74,11 @@ class CalibrationWindow(QWidget):
         self.confirm_button.clicked.connect(self.confirm_coordinates)
         layout.addWidget(self.confirm_button)
 
-        self.start_detection_button = QPushButton("Start Detection")
-        self.start_detection_button.clicked.connect(self.start_detection)
-        self.start_detection_button.setEnabled(False)
-        layout.addWidget(self.start_detection_button)
-
         self.setLayout(layout)
 
         self.cap = cv2.VideoCapture(self.camera_index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(30)
@@ -148,26 +146,7 @@ class CalibrationWindow(QWidget):
         self.cap.release()
         self.timer.stop()
         self.communicator.coordinates_confirmed.emit(coords)
-        #self.close()
-        self.confirm_button.setEnabled(False)
-        self.start_detection_button.setEnabled(True)
-
-    def start_detection(self):
-        from detect import LaserDetectionSystem
-
-        self.detection_system = LaserDetectionSystem(
-            camera_index=0,
-            serial_port="COM6",
-            baudrate=115200,
-            projector_corners=self.projector_corners,
-            camera_width=1920,
-            camera_height=1080,
-        )
-
         self.close()
-
-        self.detection_system.run()
-
 
     def closeEvent(self, event):
         if self.cap.isOpened():
@@ -182,7 +161,6 @@ class RefreshableComboBox(QComboBox):
         self._refresh_func = refresh_func
 
     def showPopup(self):
-        """Overrides the default showPopup to refresh the list before showing."""
         if self._refresh_func:
             logger.debug("Refreshing list before showing popup...")
             self._refresh_func()
@@ -254,9 +232,26 @@ class MainWindow(QMainWindow):
         self.capture_button.setEnabled(False)
         self.main_layout.addWidget(self.capture_button)
 
+        self.start_detection_button = QPushButton("Start Detection")
+        self.start_detection_button.clicked.connect(self.start_detection)
+        self.start_detection_button.setEnabled(False)
+        self.main_layout.addWidget(self.start_detection_button)
+
         self.calibrated_coordinates = None
         self.cap = None
         self.populate_camera_dropdown() # Populate initially
+
+    def start_detection(self):
+
+        self.detection_system = LaserDetectionSystem(
+            camera_index=0,
+            serial_port="COM6",
+            baudrate=115200,
+            projector_corners=self.calibrated_coordinates,
+            camera_width=CAMERA_WIDTH,
+            camera_height=CAMERA_HEIGHT,
+        )
+        self.detection_system.run()
 
     def populate_camera_dropdown(self):
         # Store current selection before clearing
@@ -409,11 +404,9 @@ class MainWindow(QMainWindow):
             self.capture_button.setEnabled(False)
             return
 
-        WIDTH = 1280
-        HEIGHT = 720
         # Set properties only if the camera was successfully opened
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         ret, frame = self.cap.read()
         self.cap.release()
 
@@ -429,14 +422,14 @@ class MainWindow(QMainWindow):
 
         dst_points = np.array([
             [0, 0],
-            [WIDTH, 0],
-            [WIDTH, HEIGHT],
-            [0, HEIGHT]
+            [CAMERA_WIDTH, 0],
+            [CAMERA_WIDTH, CAMERA_HEIGHT],
+            [0, CAMERA_HEIGHT]
         ], dtype='float32')
 
         try:
             matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-            transformed_frame = cv2.warpPerspective(frame, matrix, (WIDTH, HEIGHT))
+            transformed_frame = cv2.warpPerspective(frame, matrix, (CAMERA_WIDTH, CAMERA_HEIGHT))
 
             rgb_image = cv2.cvtColor(transformed_frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
@@ -451,6 +444,7 @@ class MainWindow(QMainWindow):
         except cv2.error as e:
             logger.error(f"Error during perspective transform: {e}")
             self.status_label.setText(f"Error during perspective transform: {e}")
+        self.start_detection_button.setEnabled(True)
 
     def resizeEvent(self, event):
         # Ensure image view scales correctly when window is resized
