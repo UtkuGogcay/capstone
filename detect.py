@@ -1,4 +1,6 @@
+import sys
 import cv2
+import pyautogui
 import serial
 import threading
 import time
@@ -38,16 +40,21 @@ class LaserDetectionSystem:
         self.camera = None
         self.gun_signal_queue = queue.Queue()
         self.stop_event = threading.Event()
-
         # Homography
         src = np.float32(projector_corners)
         dst = np.float32([[0, 0], [self.SCREEN_WIDTH, 0], [self.SCREEN_WIDTH, self.SCREEN_HEIGHT], [0, self.SCREEN_HEIGHT]])
         self.screen_homography_matrix = cv2.getPerspectiveTransform(src, dst)
 
         # Logger
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
         self.logger = logging.getLogger("LaserSystem")
-
+        self.cv2_backend=cv2.CAP_ANY
+        self.platform=sys.platform
+        if self.platform=="win32":
+            self.cv2_backend = cv2.CAP_DSHOW
+        else:
+            self.cv2_backend=cv2.CAP_AVFOUNDATION
+        self.button_to_key={"A":"f","B":"g"} #TODO Tolga'ya sor
     def map_point_to_projector(self, point):
         x, y = point
         point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
@@ -69,7 +76,7 @@ class LaserDetectionSystem:
             while not self.stop_event.is_set():
                 if self.serial_connection and self.serial_connection.in_waiting > 0:
                     data = self.serial_connection.readline().decode("utf-8").strip().lower()
-                    self.logger.debug(f"Received from serial: {data}")
+                    self.logger.info(f"Received from serial: {data}")
                     gun_signal = None
                     if self.GUN_A_SIGNAL in data:
                         gun_signal = "A"
@@ -129,10 +136,20 @@ class LaserDetectionSystem:
             if gun_signal:
                 if self.map_point_to_projector(laser_spot):
                     print("FIRE!!!!!!")
-                    self.logger.info(f"Gun Fired: Gun {gun_signal}")
+                    self.logger.info(f"Gun Fired: Gun {gun_signal}, at {laser_spot} which is mapped to {self.map_point_to_projector(laser_spot)}")
                     # TODO: Handle HID output
+                    # x,y=self.map_point_to_projector(laser_spot)
+                    # key=self.button_to_key.get(gun_signal,None)
+                    # if key is not None:
+                    #     pyautogui.moveTo(x,y)
+                    #     pyautogui.press(key)
+                    # else:
+                    #     self.logger.error(f"Gun signal {gun_signal} not mapped to any key.")
+                    # On Mac go to:
+                    # System Settings -> Privacy & Security -> Accessibility
+                    # Add your Terminal App to the list and give it permission. Without this PyAutoGUI cant control the mouse or keyboard.
                 else:
-                    self.logger.warning("Gun fired but point is outside projector screen.")
+                    self.logger.info("Gun fired but point is outside projector screen.")
 
         if len(self.projector_corners) == 4:
             cv2.polylines(frame, [self.projector_corners.astype(np.int32)], True, (0, 255, 255), 2)
@@ -140,7 +157,7 @@ class LaserDetectionSystem:
         return frame
 
     def camera_feed(self):
-        self.camera = cv2.VideoCapture(self.CAMERA_INDEX)
+        self.camera = cv2.VideoCapture(self.CAMERA_INDEX,self.cv2_backend)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
 
@@ -173,23 +190,34 @@ class LaserDetectionSystem:
             self.logger.error(f"Serial connection failed: {e}")
 
     def start_external_app(self, app_path):
-        try:
-            subprocess.Popen(app_path)
-            self.logger.info(f"Started external app: {app_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to start app: {e}")
+        # Safely try to start the external application
+        if external_app_path:
+            try:
+                subprocess.Popen(app_path)
+                self.logger.info(f"Started external application: {external_app_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to start app: {e}")
+        else:
+            self.logger.critical("No external app path provided. Skipping launch.")
 
     def run(self, external_app_path):
-        self.start_external_app(external_app_path)
+        try:
+            self.start_external_app(external_app_path)
+        except Exception as e:
+            self.logger.critical(f"Failed to start external application: {e}")
+            return
         self.start_serial()
-
-        camera_thread = threading.Thread(target=self.camera_feed)
-        camera_thread.start()
+        if self.platform=="win32":
+            camera_thread = threading.Thread(target=self.camera_feed)
+            camera_thread.start()
 
         if self.serial_connection:
             serial_thread = threading.Thread(target=self.read_serial)
             serial_thread.start()
-
+        else:
+            self.logger.critical("Serial connection failure.")
+        if self.platform!="win32":
+            self.camera_feed()
         try:
             while not self.stop_event.is_set():
                 time.sleep(1)
@@ -204,7 +232,7 @@ class LaserDetectionSystem:
 
 if __name__ == "__main__":
     external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
-    serial_port = "COM11"
+    serial_port = "COM6"
     baudrate = 115200
     projector_corners = [
         (346, 204),
@@ -214,7 +242,7 @@ if __name__ == "__main__":
     ]
 
     system = LaserDetectionSystem(
-        camera_index=1,
+        camera_index=0,
         serial_port=serial_port,
         baudrate=baudrate,
         projector_corners=projector_corners,
