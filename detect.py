@@ -46,7 +46,7 @@ class LaserDetectionSystem:
         self.screen_homography_matrix = cv2.getPerspectiveTransform(src, dst)
 
         # Logger
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
         self.logger = logging.getLogger("LaserSystem")
         self.cv2_backend=cv2.CAP_ANY
         self.platform=sys.platform
@@ -201,7 +201,11 @@ class LaserDetectionSystem:
             self.logger.critical("No external app path provided. Skipping launch.")
 
     def run(self, external_app_path):
-        self.start_external_app(external_app_path)
+        try:
+            self.start_external_app(external_app_path)
+        except Exception as e:
+            self.logger.critical(f"Failed to start external application: {e}")
+            return
         self.start_serial()
         if self.platform=="win32":
             camera_thread = threading.Thread(target=self.camera_feed)
