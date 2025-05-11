@@ -8,7 +8,7 @@ import logging
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel, QWidget,
     QVBoxLayout, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
-    QGraphicsLineItem, QHBoxLayout, QSizePolicy, QComboBox
+    QGraphicsLineItem, QHBoxLayout, QSizePolicy, QComboBox, QMessageBox
 )
 from PyQt6.QtGui import QBrush, QColor, QPen, QPixmap, QImage
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QSize
@@ -86,9 +86,20 @@ class CalibrationWindow(QWidget):
     def showEvent(self, event):
         self.showMaximized()
 
+    def show_camera_error(self):
+        logger.error(f"Could not open camera with index {self.camera_index}.")
+        error_msg = QMessageBox(self)
+        error_msg.setIcon(QMessageBox.Icon.Critical)
+        error_msg.setWindowTitle("Camera Error")
+        error_msg.setText("Could not access the camera.")
+        error_msg.setInformativeText("Please ensure the camera is properly connected.")
+        error_msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        error_msg.exec()
+        self.close()  # Close the calibration window
     def update_frame(self):
         ret, frame = self.cap.read()
         if not ret:
+            self.show_camera_error()
             return
 
         if self.frame_size is None:
