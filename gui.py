@@ -71,11 +71,16 @@ class CalibrationWindow(QWidget):
         self.confirm_button.clicked.connect(self.confirm_coordinates)
         layout.addWidget(self.confirm_button)
 
+        self.start_detection_button = QPushButton("Start Detection")
+        self.start_detection_button.clicked.connect(self.start_detection)
+        self.start_detection_button.setEnabled(False)
+        layout.addWidget(self.start_detection_button)
+
         self.setLayout(layout)
 
         self.cap = cv2.VideoCapture(self.camera_index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(30)
@@ -138,10 +143,31 @@ class CalibrationWindow(QWidget):
                 cam_y = int(pos.y() * scale_y)
                 coords.append((cam_x, cam_y))
 
+        self.projector_corners = coords
+        
         self.cap.release()
         self.timer.stop()
         self.communicator.coordinates_confirmed.emit(coords)
+        #self.close()
+        self.confirm_button.setEnabled(False)
+        self.start_detection_button.setEnabled(True)
+
+    def start_detection(self):
+        from detect import LaserDetectionSystem
+
+        self.detection_system = LaserDetectionSystem(
+            camera_index=0,
+            serial_port="COM6",
+            baudrate=115200,
+            projector_corners=self.projector_corners,
+            camera_width=1920,
+            camera_height=1080,
+        )
+
         self.close()
+
+        self.detection_system.run()
+
 
     def closeEvent(self, event):
         if self.cap.isOpened():

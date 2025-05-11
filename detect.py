@@ -157,7 +157,7 @@ class LaserDetectionSystem:
         return frame
 
     def camera_feed(self):
-        self.camera = cv2.VideoCapture(self.CAMERA_INDEX,self.cv2_backend)
+        self.camera = cv2.VideoCapture(self.CAMERA_INDEX, self.cv2_backend)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
 
@@ -191,16 +191,16 @@ class LaserDetectionSystem:
 
     def start_external_app(self, app_path):
         # Safely try to start the external application
-        if external_app_path:
+        if app_path:
             try:
                 subprocess.Popen(app_path)
-                self.logger.info(f"Started external application: {external_app_path}")
+                self.logger.info(f"Started external application: {app_path}")
             except Exception as e:
                 self.logger.error(f"Failed to start app: {e}")
         else:
             self.logger.critical("No external app path provided. Skipping launch.")
 
-    def run(self, external_app_path):
+    def run(self, external_app_path=None):
         try:
             self.start_external_app(external_app_path)
         except Exception as e:
@@ -229,8 +229,20 @@ class LaserDetectionSystem:
             self.serial_connection.close()
             self.logger.info("Closed serial connection.")
 
+def run_detection_app():
+    projector_corners = [...]
+    system = LaserDetectionSystem(
+        camera_index=0,
+        serial_port="COM6",
+        baudrate=115200,
+        projector_corners=projector_corners,
+        camera_width=1920,
+        camera_height=1080,
+    )
+    system.run()
 
-if __name__ == "__main__":
+# COMMENTED OUT FOR IMPORTING THE LOGIC INSIDE gui.py
+""" if __name__ == "__main__":
     external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
     serial_port = "COM6"
     baudrate = 115200
@@ -251,3 +263,4 @@ if __name__ == "__main__":
     )
 
     system.run(external_app_path)
+ """
