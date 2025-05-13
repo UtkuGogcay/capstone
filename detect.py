@@ -27,8 +27,6 @@ class LaserDetectionSystem:
         self.lower_red2 = np.array([170, 100, 100])
         self.upper_red2 = np.array([180, 255, 255])
         # Signals
-        self.GUN_A_SIGNAL = "ir laser fired from gun a"
-        self.GUN_B_SIGNAL = "ir laser fired from gun b"
 
         # State
         self.serial_port = serial_port
@@ -54,7 +52,7 @@ class LaserDetectionSystem:
             self.cv2_backend = cv2.CAP_DSHOW
         else:
             self.cv2_backend=cv2.CAP_AVFOUNDATION
-        self.button_to_key={"A":"f","B":"g"} #TODO Tolga'ya sor
+        self.button_to_key={"A1":"f","A2":"g","B1":"o","B2":"p"} #TODO Tolga'ya sor
     def map_point_to_projector(self, point):
         x, y = point
         point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
@@ -78,13 +76,14 @@ class LaserDetectionSystem:
                     data = self.serial_connection.readline().decode("utf-8").strip().lower()
                     self.logger.info(f"Received from serial: {data}")
                     gun_signal = None
-                    if self.GUN_A_SIGNAL in data:
-                        gun_signal = "A"
-                    elif self.GUN_B_SIGNAL in data:
-                        gun_signal = "B"
-                    elif "ready" in data:
-                        gun_signal = "ready"
-
+                    if data.startswith("a"):
+                        gun_signal = "A1"
+                    elif data.startswith("b"):
+                        gun_signal = "A2"
+                    elif data.startswith("c"):
+                        gun_signal = "B1"
+                    elif data.startswith("d"):
+                        gun_signal = "B2"
                     if gun_signal:
                         self.gun_signal_queue.put((gun_signal, time.time() * 1000))
 
