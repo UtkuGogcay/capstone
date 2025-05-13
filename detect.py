@@ -119,7 +119,7 @@ class LaserDetectionSystem:
             cv2.circle(frame, best_spot['center'], 5, (0, 255, 0), -1)
 
         if laser_spot:
-            self.logger.info(f"IR Laser Detected at: {laser_spot}")
+            self.logger.info(f"Laser Detected at: {laser_spot}")
             gun_signal = None
             old_signals = []
             while not self.gun_signal_queue.empty():
