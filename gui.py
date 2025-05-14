@@ -244,8 +244,8 @@ class MainWindow(QMainWindow):
     def start_detection(self):
 
         self.detection_system = LaserDetectionSystem(
-            camera_index=0,
-            serial_port="COM6",
+            camera_index=self.current_camera_index,
+            serial_port=self.selected_com_port,
             baudrate=115200,
             projector_corners=self.calibrated_coordinates,
             camera_width=CAMERA_WIDTH,
@@ -454,7 +454,6 @@ class MainWindow(QMainWindow):
             scaled_pixmap = original_pixmap.scaled(self.image_view.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_view.setPixmap(scaled_pixmap)
         super().resizeEvent(event) # Call the base class resize event
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

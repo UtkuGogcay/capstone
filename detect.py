@@ -19,7 +19,7 @@ class LaserDetectionSystem:
         self.CAMERA_HEIGHT = camera_height
         self.SCREEN_WIDTH = 1920
         self.SCREEN_HEIGHT = 1080
-        self.MAX_GUN_SIGNAL_AGE = 200  # ms
+        self.MAX_GUN_SIGNAL_AGE = 1000  # ms
 
         self.lower_red = np.array([0, 100, 100])
         self.upper_red = np.array([10, 255, 255])
@@ -52,7 +52,7 @@ class LaserDetectionSystem:
             self.cv2_backend = cv2.CAP_DSHOW
         else:
             self.cv2_backend=cv2.CAP_AVFOUNDATION
-        self.button_to_key={"A1":"f","A2":"g","B1":"o","B2":"p"} #TODO Tolga'ya sor
+        self.button_to_key={"a":"f","b":"g","c":"o","d":"p"} #TODO Tolga'ya sor
     def map_point_to_projector(self, point):
         x, y = point
         point_homogeneous = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
@@ -76,15 +76,19 @@ class LaserDetectionSystem:
                     data = self.serial_connection.readline().decode("utf-8").strip().lower()
                     self.logger.info(f"Received from serial: {data}")
                     gun_signal = None
-                    if data.startswith("a"):
-                        gun_signal = "A1"
-                    elif data.startswith("b"):
-                        gun_signal = "A2"
-                    elif data.startswith("c"):
-                        gun_signal = "B1"
-                    elif data.startswith("d"):
-                        gun_signal = "B2"
+                    if data.startswith("ir laser fired from gun a"):
+                        gun_signal = "a"
+                    elif data.startswith("ir laser fired from gun b"):
+                        gun_signal = "b"
+                    elif data.startswith("ir laser fired from gun c"):
+                        gun_signal = "c"
+                    elif data.startswith("ir laser fired from gun d"):
+                        gun_signal = "d"
+                    self.logger.info(f"gun_signal: {gun_signal}")
+                    self.logger.info(f"data: {data}")
+
                     if gun_signal:
+                        self.logger.debug("gun signal added : " + gun_signal)
                         self.gun_signal_queue.put((gun_signal, time.time() * 1000))
 
         except serial.SerialException as e:
@@ -123,27 +127,33 @@ class LaserDetectionSystem:
             gun_signal = None
             old_signals = []
             while not self.gun_signal_queue.empty():
+                self.logger.info(f"old_signals at: {old_signals}")
+                self.logger.info(f"gun_signal at: {gun_signal}")
                 signal, timestamp = self.gun_signal_queue.get()
                 if time.time() * 1000 - timestamp > self.MAX_GUN_SIGNAL_AGE:
                     old_signals.append((signal, timestamp))
+                    self.logger.info(f"signal at: {signal}")
                 else:
                     gun_signal = signal
                     break
 
             self.handle_old_gun_signals(old_signals)
-
+            
             if gun_signal:
+                self.logger.debug("lolololo")
+                print("sasasasasa")
                 if self.map_point_to_projector(laser_spot):
-                    print("FIRE!!!!!!")
+                    self.logger.debug("FIRE!!!!!!")
                     self.logger.info(f"Gun Fired: Gun {gun_signal}, at {laser_spot} which is mapped to {self.map_point_to_projector(laser_spot)}")
                     # TODO: Handle HID output
-                    # x,y=self.map_point_to_projector(laser_spot)
-                    # key=self.button_to_key.get(gun_signal,None)
-                    # if key is not None:
-                    #     pyautogui.moveTo(x,y)
-                    #     pyautogui.press(key)
-                    # else:
-                    #     self.logger.error(f"Gun signal {gun_signal} not mapped to any key.")
+                    x,y=self.map_point_to_projector(laser_spot)
+                    key=self.button_to_key.get(gun_signal,None)
+                    print(f"key: ", key)
+                    if key is not None:
+                        pyautogui.moveTo(x,y)
+                        pyautogui.press(key)
+                    else:
+                        self.logger.error(f"Gun signal {gun_signal} not mapped to any key.")
                     # On Mac go to:
                     # System Settings -> Privacy & Security -> Accessibility
                     # Add your Terminal App to the list and give it permission. Without this PyAutoGUI cant control the mouse or keyboard.
@@ -241,9 +251,9 @@ def run_detection_app():
     system.run()
 
 # COMMENTED OUT FOR IMPORTING THE LOGIC INSIDE gui.py
-""" if __name__ == "__main__":
+if __name__ == "__main__":
     external_app_path = "C:\\Users\\Public\\Desktop\\Notepad++.lnk"  # Example
-    serial_port = "COM6"
+    serial_port = "COM5"
     baudrate = 115200
     projector_corners = [
         (346, 204),
@@ -262,4 +272,4 @@ def run_detection_app():
     )
 
     system.run(external_app_path)
- """
+ 
