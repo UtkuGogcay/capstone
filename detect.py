@@ -79,11 +79,13 @@ class LaserDetectionSystem:
                     if data.startswith("ir laser fired from gun a"):
                         gun_signal = "a"
                     elif data.startswith("ir laser fired from gun b"):
-                        gun_signal = "b"
+                        key=self.button_to_key.get("b",None)
+                        pyautogui.press(key)
                     elif data.startswith("ir laser fired from gun c"):
                         gun_signal = "c"
                     elif data.startswith("ir laser fired from gun d"):
-                        gun_signal = "d"
+                        key=self.button_to_key.get("d",None)
+                        pyautogui.press(key)
                     self.logger.info(f"gun_signal: {gun_signal}")
                     self.logger.info(f"data: {data}")
 
