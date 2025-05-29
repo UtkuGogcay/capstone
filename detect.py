@@ -142,18 +142,16 @@ class LaserDetectionSystem:
             self.handle_old_gun_signals(old_signals)
             
             if gun_signal:
-                self.logger.debug("lolololo")
-                print("sasasasasa")
                 if self.map_point_to_projector(laser_spot):
                     self.logger.debug("FIRE!!!!!!")
                     self.logger.info(f"Gun Fired: Gun {gun_signal}, at {laser_spot} which is mapped to {self.map_point_to_projector(laser_spot)}")
-                    # TODO: Handle HID output
                     x,y=self.map_point_to_projector(laser_spot)
                     key=self.button_to_key.get(gun_signal,None)
                     print(f"key: ", key)
                     if key is not None:
                         pyautogui.moveTo(x,y)
                         pyautogui.press(key)
+                        pyautogui.click()
                     else:
                         self.logger.error(f"Gun signal {gun_signal} not mapped to any key.")
                     # On Mac go to:
